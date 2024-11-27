@@ -2,81 +2,93 @@ name: "Terraform Infrastructure Change Management Pipeline with GitHub Actions"
 
 on:
   push:
-    branches: [master]
+    branches: [ "main" ]
+  pull_request:
+
+permissions:
+  contents: read
 
 env:
- # verbosity setting for Terraform logs
- TF_LOG: INFO
- # Credentials for deployment to AWS
- AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
- AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # verbosity setting for Terraform logs
+  TF_LOG: INFO
+  # Credentials for deployment to AWS
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
 jobs:
- terraform:
-   name: "Terraform Infrastructure Change Management"
-   runs-on: ubuntu-latest
-   defaults:
-     run:
-       shell: bash
-       # We keep Terraform files in the terraform directory.
-       working-directory: ./terraform
+  terraform:
+    name: 'Terraform Infrastructure Management'
+    runs-on: ubuntu-latest
 
-   steps:
-     - name: Checkout the repository to the runner
-       uses: actions/checkout@v2
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+        # We keep Terraform files in the terraform directory.
+        working-directory: ./terraform
 
-     - name: Setup Terraform with specified version on the runner
-       uses: hashicorp/setup-terraform@v2
-       with:
-         terraform_version: 1.3.0
+    steps:
+    # Checkout the repository to the GitHub Actions runner
+    - name: Checkout the repository to the runner
+      uses: actions/checkout@v4
 
-     - name: Terraform init
-       id: init
-       run: terraform init
+    # Install the latest version of Terraform CLI and configure the Terraform CLI configuration file with a Terraform Cloud user API token
+    - name: Setup Terraform with specified version on the runner
+      uses: hashicorp/setup-terraform@v2
+      with:
+        cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-     - name: Terraform format
-       id: fmt
-       run: terraform fmt -check
+    # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+    - name: Terraform init
+      id: init
+      run: terraform init
 
-     - name: Terraform validate
-       id: validate
-       run: terraform validate
+    # Checks that all Terraform configuration files adhere to a canonical format
+    - name: Terraform format
+      id: fmt
+      run: terraform fmt -check
 
-     - name: Terraform plan
-       id: plan
-       if: github.event_name == 'pull_request'
-       run: terraform plan -no-color -input=false
-       continue-on-error: true
-    
-     - uses: actions/github-script@v6
-       if: github.event_name == 'pull_request'
-       env:
-         PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
-       with:
-         script: |
-           const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
-           #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
-           #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
-           #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
-           <details><summary>Show Plan</summary>
-           \`\`\`\n
-           ${process.env.PLAN}
-           \`\`\`
-           </details>
+    - name: Terraform validate
+      id: validate
+      run: terraform validate
 
-           *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+    # Generates an execution plan for Terraform
+    - name: Terraform Plan
+      id: plan
+      run: terraform plan -input=false
 
-           github.rest.issues.createComment({
-             issue_number: context.issue.number,
-             owner: context.repo.owner,
-             repo: context.repo.repo,
-             body: output
-           })
+    - uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      env:
+        PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+      with:
+        script: |
+          const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+          #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+          #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+          #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+          <details><summary>Show Plan</summary>
+          \`\`\`\n
+          ${process.env.PLAN}
+          \`\`\`
+          </details>
 
-     - name: Terraform Plan Status
-       if: steps.plan.outcome == 'failure'
-       run: exit 1
+          *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
 
-     - name: Terraform Apply
-       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-       run: terraform apply -auto-approve -input=false
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+
+    - name: Terraform Plan Status
+      if: steps.plan.outcome == 'failure'
+      run: exit 1
+
+      # On push to "main", build or change infrastructure according to Terraform configuration files
+      # Note: It is recommended to set up a required "strict" status check in your repository for "Terraform Cloud". See the documentation on "strict" required status checks for more information: https://help.github.com/en/github/administering-a-repository/types-of-required-status-checks
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/"main"' && github.event_name == 'push'
+      run: terraform apply -auto-approve -input=false
+
